@@ -34,13 +34,35 @@ module tt_um_kilian_interference (
     .vpos(y)
   );
 
-  // --- Distance-squared accumulator (single source at screen center) ---
-  // Adopted from tt08-vga-drop (proven in silicon).
-  // r1 accumulates y-component, r2 accumulates x-component.
-  // r = combined distance metric used for ring rendering.
+  // --- Frame counter (increments once per frame on vsync rising edge) ---
+  reg [11:0] frame_counter;
+  reg vsync_prev;
+  always @(posedge clk) begin
+    if (~rst_n) begin
+      frame_counter <= 0;
+      vsync_prev <= 0;
+    end else begin
+      vsync_prev <= vsync;
+      if (vsync && !vsync_prev)
+        frame_counter <= frame_counter + 1;
+    end
+  end
 
-  wire signed [9:0] center_x = 10'sd320;
-  wire signed [9:0] center_y = 10'sd240;
+  // --- Source position via triangle waves ---
+  // ±16 pixels range, smooth drift.
+  // tri_x: 5-bit, period 512 frames (~8.5s), steps every 8 frames
+  // tri_y: 5-bit, period 1024 frames (~17s), steps every 16 frames
+  wire [4:0] tri_x = frame_counter[8] ? ~frame_counter[7:3] : frame_counter[7:3];
+  wire [4:0] tri_y = frame_counter[9] ? ~frame_counter[8:4] : frame_counter[8:4];
+
+  // Map triangle (0..31) to screen offset (-16..+15) from center
+  wire signed [9:0] offset_x = {5'b0, tri_x} - 10'sd16;
+  wire signed [9:0] offset_y = {5'b0, tri_y} - 10'sd16;
+
+  // --- Distance-squared accumulator (single moving source) ---
+  // Adopted from tt08-vga-drop (proven in silicon).
+  wire signed [9:0] center_x = 10'sd320 + offset_x;
+  wire signed [9:0] center_y = 10'sd240 + offset_y;
   wire signed [9:0] p_x = x - center_x;
   wire signed [9:0] p_y = y - center_y;
 
@@ -63,10 +85,16 @@ module tt_um_kilian_interference (
         if (x < center_y)
           r1 <= r1 + center_y;
       end else if (x == 640) begin
-        // Initialize r2 = 320^2 (constant for center_x = 320)
+        // (320+ox)^2 = 320^2 + (640+ox)*ox
+        // Start with 320^2, accumulate remainder during hblank
         r2 <= 320*320;
       end else if (x > 640) begin
-        // No offset to accumulate when center is at 320
+        // Accumulate (640+offset_x)*|offset_x| by repeated addition
+        // Add when offset_x > 0, subtract when offset_x < 0
+        if (offset_x > 0 && x - 10'd641 < {5'd0, offset_x[4:0]})
+          r2 <= r2 + 10'sd640 + offset_x;
+        else if (offset_x < 0 && x - 10'd641 < {5'd0, ~offset_x[4:0] + 5'd1})
+          r2 <= r2 - (10'sd640 + offset_x);
       end else if (display_on & x == 0) begin
         r1 <= r1 + 2*p_y + 1;
       end else if (display_on) begin

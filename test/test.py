@@ -268,3 +268,59 @@ async def test_rings_present(dut):
     assert len(set(row_100)) >= 2, "Row 100 should have ring variation"
     assert len(set(row_400)) >= 2, "Row 400 should have ring variation"
     dut._log.info("Ring structure verified across multiple rows")
+
+
+@cocotb.test()
+async def test_rings_move(dut):
+    """Ring pattern should change between frames (source is moving)."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    frame_clocks = V_TOTAL * H_TOTAL
+
+    # Skip first 2 frames (y=0 init + first valid frame)
+    await ClockCycles(dut.clk, frame_clocks * 2 + 100)
+
+    # Capture frame A
+    pixels_a = await capture_frame(dut)
+
+    # Skip 16 frames — source steps every 8 frames, so 2 position changes
+    await ClockCycles(dut.clk, frame_clocks * 16)
+
+    # Capture frame B
+    pixels_b = await capture_frame(dut)
+
+    # Compare center region — should differ if source has moved
+    differences = 0
+    samples = 0
+    for y in range(200, 280):
+        for x in range(280, 360):
+            samples += 1
+            if pixels_a[y][x] != pixels_b[y][x]:
+                differences += 1
+
+    pct = differences * 100 // samples
+    assert differences > 0, "Frames should differ — source should be moving"
+    dut._log.info(f"Frame difference: {differences}/{samples} pixels ({pct}%) changed")
+
+
+@cocotb.test()
+async def test_multi_frame_dump(dut):
+    """Capture frames at intervals and save as PNGs for visual review."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    frame_clocks = V_TOTAL * H_TOTAL
+
+    # Skip init frame
+    await ClockCycles(dut.clk, frame_clocks + 100)
+
+    for i, skip in enumerate([0, 10, 10, 20]):
+        await ClockCycles(dut.clk, frame_clocks * skip)
+        pixels = await capture_frame(dut)
+        save_frame_png(pixels, f"frame_step3_{i}.png")
+        dut._log.info(f"Saved frame {i} (after {skip} frames skip)")
+
+    dut._log.info("Multi-frame dump complete — check output/frame_step3_*.png")

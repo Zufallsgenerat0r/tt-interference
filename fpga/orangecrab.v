@@ -1,30 +1,32 @@
 /*
  * OrangeCrab ECP5-85F wrapper for tt_um_kilian_interference
- * Generates 25.2 MHz VGA pixel clock from 48 MHz oscillator via PLL.
- * VGA PMOD directly maps to uo_out[7:0] on GPIO pins.
+ * Divides 48 MHz to ~24 MHz for VGA pixel clock (close enough for VGA tolerance).
  */
 
 `default_nettype none
 
 module top (
-    input  wire clk48,      // 48 MHz oscillator
-    input  wire usr_btn,    // User button (directly active high after DDR IO pad)
-    output wire led_r,      // RGB LED red (active low)
-    output wire led_g,       // RGB LED green (active low)
-    output wire led_b,      // RGB LED blue (active low)
-    output wire [7:0] pmod  // VGA PMOD: directly maps to uo_out
+    input  wire clk48,
+    input  wire usr_btn,
+    output wire led_r,
+    output wire led_g,
+    output wire led_b,
+    output wire [7:0] pmod
 );
 
-    wire clk_25m;
-    wire pll_locked;
+    // Simple clock divider: 48 MHz / 2 = 24 MHz
+    // VGA spec is 25.175 MHz, but monitors tolerate ~5% deviation.
+    // 24 MHz = 4.7% slow — within tolerance for most monitors.
+    reg clk_24m;
+    always @(posedge clk48)
+        clk_24m <= ~clk_24m;
 
-    // PLL: 48 MHz -> 25.2 MHz
-    // VCO = 48 * 21 / 2 = 504 MHz, CLKOP = 504 / 20 = 25.2 MHz
-    pll_25m pll_inst (
-        .clki(clk48),
-        .clko(clk_25m),
-        .locked(pll_locked)
-    );
+    // Power-on reset
+    reg [3:0] reset_cnt = 4'hF;
+    wire rst_n = (reset_cnt == 0);
+    always @(posedge clk_24m)
+        if (reset_cnt != 0)
+            reset_cnt <= reset_cnt - 1;
 
     wire [7:0] uo_out;
 
@@ -35,62 +37,15 @@ module top (
         .uio_out(),
         .uio_oe (),
         .ena    (1'b1),
-        .clk    (clk_25m),
-        .rst_n  (pll_locked)
+        .clk    (clk_24m),
+        .rst_n  (rst_n)
     );
 
-    assign pmod = uo_out;
+    // Invert HSYNC[7] and VSYNC[3] for active-low VGA sync.
+    assign pmod = uo_out ^ 8'b1000_1000;
 
-    // LED: green when PLL locked, off otherwise
-    assign led_r = 1'b1;            // off (active low)
-    assign led_g = ~pll_locked;     // on when locked
-    assign led_b = 1'b1;            // off
-
-endmodule
-
-
-// ECP5 PLL: 48 MHz -> 25.2 MHz
-module pll_25m (
-    input  wire clki,
-    output wire clko,
-    output wire locked
-);
-
-    (* ICP_CURRENT="12" *)
-    (* LPF_RESISTOR="8" *)
-    (* MFG_ENABLE_FILTEROPAMP="1" *)
-    (* MFG_GMCREF_SEL="2" *)
-    EHXPLLL #(
-        .PLLRST_ENA       ("DISABLED"),
-        .INTFB_WAKE       ("DISABLED"),
-        .STDBY_ENABLE      ("DISABLED"),
-        .DPHASE_SOURCE     ("DISABLED"),
-        .OUTDIVIDER_MUXA   ("DIVA"),
-        .OUTDIVIDER_MUXB   ("DIVB"),
-        .OUTDIVIDER_MUXC   ("DIVC"),
-        .OUTDIVIDER_MUXD   ("DIVD"),
-        .CLKI_DIV          (2),
-        .CLKOP_ENABLE      ("ENABLED"),
-        .CLKOP_DIV         (20),
-        .CLKOP_CPHASE      (9),
-        .CLKOP_FPHASE      (0),
-        .FEEDBK_PATH       ("CLKOP"),
-        .CLKFB_DIV         (21)
-    ) pll_i (
-        .RST       (1'b0),
-        .STDBY     (1'b0),
-        .CLKI      (clki),
-        .CLKOP     (clko),
-        .CLKFB     (clko),
-        .CLKINTFB  (),
-        .PHASESEL0 (1'b0),
-        .PHASESEL1 (1'b0),
-        .PHASEDIR  (1'b0),
-        .PHASESTEP (1'b0),
-        .PHASELOADREG (1'b0),
-        .PLLWAKESYNC (1'b0),
-        .ENCLKOP   (1'b0),
-        .LOCK      (locked)
-    );
+    assign led_r = 1'b1;
+    assign led_g = ~rst_n;  // green when running
+    assign led_b = 1'b1;
 
 endmodule

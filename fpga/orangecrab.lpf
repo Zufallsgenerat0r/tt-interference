@@ -1,5 +1,5 @@
-# OrangeCrab r0.2 (ECP5-85F) pin constraints
-# Adjust PMOD pin assignments to match your physical wiring.
+# OrangeCrab r0.2.1 (ECP5-85F) pin constraints
+# Pin mapping matches tt08-vga-donut working project.
 
 # 48 MHz oscillator
 LOCATE COMP "clk48" SITE "A9";
@@ -19,25 +19,28 @@ IOBUF PORT "led_r" IO_TYPE=LVCMOS33;
 IOBUF PORT "led_g" IO_TYPE=LVCMOS33;
 IOBUF PORT "led_b" IO_TYPE=LVCMOS33;
 
-# VGA PMOD on GPIO header
-# uo_out mapping: {HSYNC, B0, G0, R0, VSYNC, B1, G1, R1}
-# Wire your VGA PMOD to these GPIO pins:
-#   pmod[0] = R1    -> GPIO 0
-#   pmod[1] = G1    -> GPIO 1
-#   pmod[2] = B1    -> GPIO 5
-#   pmod[3] = VSYNC -> GPIO 6
-#   pmod[4] = R0    -> GPIO 9
-#   pmod[5] = G0    -> GPIO 10
-#   pmod[6] = B0    -> GPIO 11
-#   pmod[7] = HSYNC -> GPIO 12
-LOCATE COMP "pmod[0]" SITE "N17";
-LOCATE COMP "pmod[1]" SITE "M18";
-LOCATE COMP "pmod[2]" SITE "B10";
-LOCATE COMP "pmod[3]" SITE "B9";
-LOCATE COMP "pmod[4]" SITE "C8";
-LOCATE COMP "pmod[5]" SITE "B8";
-LOCATE COMP "pmod[6]" SITE "A8";
-LOCATE COMP "pmod[7]" SITE "H2";
+# VGA PMOD — matching tt08-vga-donut pin assignment
+# TinyVGA Pmod top row (pins 1-4):
+#   pin 1 = R1    -> gpio_a2 (N4)
+#   pin 2 = G1    -> gpio_a1 (N3)
+#   pin 3 = B1    -> gpio_a0 (L4)
+#   pin 4 = VS    -> gpio_0  (N17)
+# TinyVGA Pmod bottom row (pins 7-10):
+#   pin 7 = R0    -> gpio_a5 (T17)
+#   pin 8 = G0    -> gpio_a4 (G4)
+#   pin 9 = B0    -> gpio_a3 (H4)
+#   pin 10 = HS   -> gpio_1  (M18)
+
+# uo_out = {HSYNC, B0, G0, R0, VSYNC, B1, G1, R1}
+#            [7]   [6] [5] [4]  [3]   [2] [1] [0]
+LOCATE COMP "pmod[0]" SITE "N4";
+LOCATE COMP "pmod[1]" SITE "N3";
+LOCATE COMP "pmod[2]" SITE "L4";
+LOCATE COMP "pmod[3]" SITE "N17";
+LOCATE COMP "pmod[4]" SITE "T17";
+LOCATE COMP "pmod[5]" SITE "G4";
+LOCATE COMP "pmod[6]" SITE "H4";
+LOCATE COMP "pmod[7]" SITE "M18";
 IOBUF PORT "pmod[0]" IO_TYPE=LVCMOS33;
 IOBUF PORT "pmod[1]" IO_TYPE=LVCMOS33;
 IOBUF PORT "pmod[2]" IO_TYPE=LVCMOS33;

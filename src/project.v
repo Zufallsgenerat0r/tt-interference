@@ -19,7 +19,7 @@ module tt_um_kilian_interference (
   assign uio_out = 0;
   assign uio_oe  = 0;
 
-  wire _unused = &{ena, ui_in, uio_in, 1'b0};
+  wire _unused = &{ena, ui_in[7:2], uio_in, 1'b0};
 
   wire hsync, vsync, display_on;
   wire [9:0] x, y;
@@ -115,12 +115,20 @@ module tt_um_kilian_interference (
     end
   end
 
-  // --- Interference: XOR phase bits from both sources ---
-  wire [1:0] ring = ra[9:8] ^ rb[9:8];
+  // --- Interference: chromatic phase offset ---
+  // Each RGB channel XORs different bit pairs from the distance metrics,
+  // creating rainbow-like color separation in the interference pattern.
+  // ui_in[1:0] selects palette variant.
+  wire [1:0] palette = ui_in[1:0];
 
-  wire [1:0] R = display_on ? ring : 2'b00;
-  wire [1:0] G = display_on ? ring : 2'b00;
-  wire [1:0] B = display_on ? ring : 2'b00;
+  wire [1:0] R_ring = ra[9:8]   ^ rb[9:8];
+  wire [1:0] G_ring = ra[10:9]  ^ rb[10:9];
+  wire [1:0] B_ring = ra[11:10] ^ rb[11:10];
+
+  // Palette variations via simple bit manipulation
+  wire [1:0] R = display_on ? (palette[0] ? G_ring : R_ring) : 2'b00;
+  wire [1:0] G = display_on ? (palette[1] ? B_ring : G_ring) : 2'b00;
+  wire [1:0] B = display_on ? (palette[0] ^ palette[1] ? R_ring : B_ring) : 2'b00;
 
   // TinyVGA Pmod: {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]}
   assign uo_out = {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]};

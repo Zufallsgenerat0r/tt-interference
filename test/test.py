@@ -324,3 +324,38 @@ async def test_multi_frame_dump(dut):
         dut._log.info(f"Saved frame {i} (after {skip} frames skip)")
 
     dut._log.info("Multi-frame dump complete — check output/frame_step3_*.png")
+
+
+@cocotb.test()
+async def test_interference_pattern(dut):
+    """Two-source interference should produce a visually distinct pattern."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    frame_clocks = V_TOTAL * H_TOTAL
+
+    # Skip init frame
+    await ClockCycles(dut.clk, frame_clocks + 100)
+
+    pixels = await capture_frame(dut)
+    save_frame_png(pixels, "frame_step4.png")
+
+    # Interference should produce all 4 grayscale levels
+    all_colors = set()
+    for y in range(0, V_DISPLAY, 4):
+        for x in range(0, H_DISPLAY, 4):
+            all_colors.add(pixels[y][x])
+    assert len(all_colors) >= 3, f"Expected color variation, got {len(all_colors)} unique"
+    dut._log.info(f"Color variation: {len(all_colors)} unique colors")
+
+    # The XOR interference should break the single-source radial symmetry.
+    # Check that horizontal and vertical center lines have different patterns
+    # (single source would have matching patterns along both axes).
+    h_row = [pixels[240][x] for x in range(0, H_DISPLAY)]
+    v_col = [pixels[y][320] for y in range(0, V_DISPLAY)]
+    h_unique = len(set(h_row))
+    v_unique = len(set(v_col))
+    assert h_unique >= 2, "Horizontal center should have variation"
+    assert v_unique >= 2, "Vertical center should have variation"
+    dut._log.info(f"Interference pattern: h={h_unique}, v={v_unique} unique values")

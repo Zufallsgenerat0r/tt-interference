@@ -48,64 +48,75 @@ module tt_um_kilian_interference (
     end
   end
 
-  // --- Source position via triangle waves ---
-  // ±16 pixels range, smooth drift.
-  // tri_x: 5-bit, period 512 frames (~8.5s), steps every 8 frames
-  // tri_y: 5-bit, period 1024 frames (~17s), steps every 16 frames
-  wire [4:0] tri_x = frame_counter[8] ? ~frame_counter[7:3] : frame_counter[7:3];
-  wire [4:0] tri_y = frame_counter[9] ? ~frame_counter[8:4] : frame_counter[8:4];
+  // --- Source A position ---
+  wire [4:0] tri_ax = frame_counter[8]  ? ~frame_counter[7:3] : frame_counter[7:3];
+  wire [4:0] tri_ay = frame_counter[9]  ? ~frame_counter[8:4] : frame_counter[8:4];
+  wire signed [9:0] offset_ax = {5'b0, tri_ax} - 10'sd16;
+  wire signed [9:0] offset_ay = {5'b0, tri_ay} - 10'sd16;
 
-  // Map triangle (0..31) to screen offset (-16..+15) from center
-  wire signed [9:0] offset_x = {5'b0, tri_x} - 10'sd16;
-  wire signed [9:0] offset_y = {5'b0, tri_y} - 10'sd16;
+  // --- Source B position (inverted triangle = opposite phase, different periods) ---
+  wire [4:0] tri_bx = frame_counter[9]  ? frame_counter[8:4] : ~frame_counter[8:4];
+  wire [4:0] tri_by = frame_counter[7]  ? frame_counter[6:2] : ~frame_counter[6:2];
+  wire signed [9:0] offset_bx = {5'b0, tri_bx} - 10'sd16;
+  wire signed [9:0] offset_by = {5'b0, tri_by} - 10'sd16;
 
-  // --- Distance-squared accumulator (single moving source) ---
-  // Adopted from tt08-vga-drop (proven in silicon).
-  wire signed [9:0] center_x = 10'sd320 + offset_x;
-  wire signed [9:0] center_y = 10'sd240 + offset_y;
-  wire signed [9:0] p_x = x - center_x;
-  wire signed [9:0] p_y = y - center_y;
+  // --- Source centers and pixel distances ---
+  wire signed [9:0] center_ax = 10'sd320 + offset_ax;
+  wire signed [9:0] center_ay = 10'sd240 + offset_ay;
+  wire signed [9:0] p_ax = x - center_ax;
+  wire signed [9:0] p_ay = y - center_ay;
 
-  reg signed [17:0] r1;
-  reg signed [18:0] r2;
-  wire signed [19:0] r = 2*(r1 - center_y*2) + r2 - center_x*2 + 2;
+  wire signed [9:0] center_bx = 10'sd320 + offset_bx;
+  wire signed [9:0] center_by = 10'sd240 + offset_by;
+  wire signed [9:0] p_bx = x - center_bx;
+  wire signed [9:0] p_by = y - center_by;
+
+  // --- Distance-squared accumulators (two sources) ---
+  reg signed [17:0] r1a, r1b;
+  reg signed [18:0] r2a, r2b;
+  wire signed [19:0] ra = 2*(r1a - center_ay*2) + r2a - center_ax*2 + 2;
+  wire signed [19:0] rb = 2*(r1b - center_by*2) + r2b - center_bx*2 + 2;
 
   always @(posedge clk) begin
     if (~rst_n) begin
-      r1 <= 0;
-      r2 <= 0;
+      r1a <= 0; r2a <= 0;
+      r1b <= 0; r2b <= 0;
     end else begin
       if (vsync) begin
-        r1 <= 0;
-        r2 <= 0;
+        r1a <= 0; r2a <= 0;
+        r1b <= 0; r2b <= 0;
       end
 
       if (display_on & y == 0) begin
-        // Compute center_y^2 by repeated addition (no multiplier)
-        if (x < center_y)
-          r1 <= r1 + center_y;
+        // Both sources init y-squared during first scanline
+        if (x < center_ay) r1a <= r1a + center_ay;
+        if (x < center_by) r1b <= r1b + center_by;
       end else if (x == 640) begin
-        // (320+ox)^2 = 320^2 + (640+ox)*ox
-        // Start with 320^2, accumulate remainder during hblank
-        r2 <= 320*320;
+        r2a <= 320*320;
+        r2b <= 320*320;
       end else if (x > 640) begin
-        // Accumulate (640+offset_x)*|offset_x| by repeated addition
-        // Add when offset_x > 0, subtract when offset_x < 0
-        if (offset_x > 0 && x - 10'd641 < {5'd0, offset_x[4:0]})
-          r2 <= r2 + 10'sd640 + offset_x;
-        else if (offset_x < 0 && x - 10'd641 < {5'd0, ~offset_x[4:0] + 5'd1})
-          r2 <= r2 - (10'sd640 + offset_x);
+        // Source A hblank offset
+        if (offset_ax > 0 && x - 10'd641 < {5'd0, offset_ax[4:0]})
+          r2a <= r2a + 10'sd640 + offset_ax;
+        else if (offset_ax < 0 && x - 10'd641 < {5'd0, ~offset_ax[4:0] + 5'd1})
+          r2a <= r2a - (10'sd640 + offset_ax);
+        // Source B hblank offset (independent)
+        if (offset_bx > 0 && x - 10'd641 < {5'd0, offset_bx[4:0]})
+          r2b <= r2b + 10'sd640 + offset_bx;
+        else if (offset_bx < 0 && x - 10'd641 < {5'd0, ~offset_bx[4:0] + 5'd1})
+          r2b <= r2b - (10'sd640 + offset_bx);
       end else if (display_on & x == 0) begin
-        r1 <= r1 + 2*p_y + 1;
+        r1a <= r1a + 2*p_ay + 1;
+        r1b <= r1b + 2*p_by + 1;
       end else if (display_on) begin
-        r2 <= r2 + 2*p_x + 1;
+        r2a <= r2a + 2*p_ax + 1;
+        r2b <= r2b + 2*p_bx + 1;
       end
     end
   end
 
-  // Extract ring pattern from distance metric
-  // K=8: ring band changes every 256 in r-value
-  wire [1:0] ring = r[9:8];
+  // --- Interference: XOR phase bits from both sources ---
+  wire [1:0] ring = ra[9:8] ^ rb[9:8];
 
   wire [1:0] R = display_on ? ring : 2'b00;
   wire [1:0] G = display_on ? ring : 2'b00;

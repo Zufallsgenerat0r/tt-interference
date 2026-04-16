@@ -34,9 +34,54 @@ module tt_um_kilian_interference (
     .vpos(y)
   );
 
-  wire [1:0] R = display_on ? 2'b11 : 2'b00;
-  wire [1:0] G = display_on ? 2'b11 : 2'b00;
-  wire [1:0] B = display_on ? 2'b11 : 2'b00;
+  // --- Distance-squared accumulator (single source at screen center) ---
+  // Adopted from tt08-vga-drop (proven in silicon).
+  // r1 accumulates y-component, r2 accumulates x-component.
+  // r = combined distance metric used for ring rendering.
+
+  wire signed [9:0] center_x = 10'sd320;
+  wire signed [9:0] center_y = 10'sd240;
+  wire signed [9:0] p_x = x - center_x;
+  wire signed [9:0] p_y = y - center_y;
+
+  reg signed [17:0] r1;
+  reg signed [18:0] r2;
+  wire signed [19:0] r = 2*(r1 - center_y*2) + r2 - center_x*2 + 2;
+
+  always @(posedge clk) begin
+    if (~rst_n) begin
+      r1 <= 0;
+      r2 <= 0;
+    end else begin
+      if (vsync) begin
+        r1 <= 0;
+        r2 <= 0;
+      end
+
+      if (display_on & y == 0) begin
+        // Compute center_y^2 by repeated addition (no multiplier)
+        if (x < center_y)
+          r1 <= r1 + center_y;
+      end else if (x == 640) begin
+        // Initialize r2 = 320^2 (constant for center_x = 320)
+        r2 <= 320*320;
+      end else if (x > 640) begin
+        // No offset to accumulate when center is at 320
+      end else if (display_on & x == 0) begin
+        r1 <= r1 + 2*p_y + 1;
+      end else if (display_on) begin
+        r2 <= r2 + 2*p_x + 1;
+      end
+    end
+  end
+
+  // Extract ring pattern from distance metric
+  // K=8: ring band changes every 256 in r-value
+  wire [1:0] ring = r[9:8];
+
+  wire [1:0] R = display_on ? ring : 2'b00;
+  wire [1:0] G = display_on ? ring : 2'b00;
+  wire [1:0] B = display_on ? ring : 2'b00;
 
   // TinyVGA Pmod: {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]}
   assign uo_out = {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]};

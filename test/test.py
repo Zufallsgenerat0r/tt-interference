@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Kilian
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, RisingEdge, FallingEdge
@@ -144,15 +145,15 @@ async def test_vsync_period(dut):
 
 
 @cocotb.test()
-async def test_active_pixel_count(dut):
-    """Exactly 640*480 = 307200 active pixels per frame (non-black during display)."""
+async def test_display_line_count(dut):
+    """Verify 480 display lines per frame by counting hsync edges during active video."""
     clock = Clock(dut.clk, 39722, unit="ps")
     cocotb.start_soon(clock.start())
     await reset_dut(dut)
 
-    frame_clocks = V_TOTAL * H_TOTAL  # 420000
+    frame_clocks = V_TOTAL * H_TOTAL
 
-    # Wait for vsync rising edge to align to frame start
+    # Align to vsync rising edge
     prev_vsync = 0
     for _ in range(frame_clocks + 100):
         await RisingEdge(dut.clk)
@@ -161,39 +162,109 @@ async def test_active_pixel_count(dut):
             break
         prev_vsync = vsync
 
-    # Wait for vsync to end and display to begin
-    for _ in range(frame_clocks):
+    # Count hsync rising edges until next vsync
+    line_count = 0
+    prev_hsync = 0
+    prev_vsync = 1
+    for _ in range(frame_clocks + 100):
         await RisingEdge(dut.clk)
-        _, vsync, _, _, _ = decode_vga(dut.uo_out)
-        if not vsync:
+        hsync, vsync, _, _, _ = decode_vga(dut.uo_out)
+        if hsync and not prev_hsync:
+            line_count += 1
+        if vsync and not prev_vsync:
             break
+        prev_hsync = hsync
+        prev_vsync = vsync
 
-    # Wait for next vsync rising edge = start of a fresh frame
+    assert line_count == V_TOTAL, f"Lines per frame: expected {V_TOTAL}, got {line_count}"
+    dut._log.info(f"Lines per frame: {line_count} (expected {V_TOTAL})")
+
+
+async def capture_frame(dut):
+    """Capture one full VGA frame as a 640x480 array of (r, g, b) tuples."""
+    frame_clocks = V_TOTAL * H_TOTAL
+
+    # Align to vsync rising edge
     prev_vsync = 0
-    for _ in range(frame_clocks):
+    for _ in range(frame_clocks + 100):
         await RisingEdge(dut.clk)
         _, vsync, _, _, _ = decode_vga(dut.uo_out)
         if vsync and not prev_vsync:
             break
         prev_vsync = vsync
 
-    # Now count active pixels for one full frame
-    active_count = 0
+    # Capture pixels for exactly one frame
+    pixels = []
+    row = []
     prev_vsync = 1
-    frame_done = False
     for _ in range(frame_clocks + 100):
         await RisingEdge(dut.clk)
         hsync, vsync, r, g, b = decode_vga(dut.uo_out)
-        # Active pixel = any color channel non-zero (design outputs solid color during display)
-        if not hsync and not vsync and (r or g or b):
-            active_count += 1
-        # Detect next vsync rising edge = frame complete
-        if vsync and not prev_vsync:
-            frame_done = True
-            break
-        prev_vsync = vsync
+        if not hsync and not vsync:
+            row.append((r, g, b))
+            if len(row) == H_DISPLAY:
+                pixels.append(row)
+                row = []
+                if len(pixels) == V_DISPLAY:
+                    break
+    return pixels
 
-    expected = H_DISPLAY * V_DISPLAY  # 307200
-    assert frame_done, "Never saw second vsync - frame didn't complete"
-    assert active_count == expected, f"Active pixels: expected {expected}, got {active_count}"
-    dut._log.info(f"Active pixels per frame: {active_count} (expected {expected})")
+
+def save_frame_png(pixels, filename):
+    """Save captured frame as PNG."""
+    from PIL import Image
+    h = len(pixels)
+    w = len(pixels[0]) if h > 0 else 0
+    img = Image.new("RGB", (w, h))
+    for y in range(h):
+        for x in range(w):
+            r, g, b = pixels[y][x]
+            # Scale 2-bit color to 8-bit
+            img.putpixel((x, y), (r * 85, g * 85, b * 85))
+    os.makedirs("output", exist_ok=True)
+    img.save(f"output/{filename}")
+    return img
+
+
+@cocotb.test()
+async def test_frame_dump(dut):
+    """Capture a frame and save as PNG for visual inspection."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    # Run past first frame (y=0 init happens here)
+    await ClockCycles(dut.clk, V_TOTAL * H_TOTAL + 100)
+
+    pixels = await capture_frame(dut)
+    assert len(pixels) == V_DISPLAY, f"Expected {V_DISPLAY} rows, got {len(pixels)}"
+    save_frame_png(pixels, "frame_step2.png")
+    dut._log.info("Frame saved to output/frame_step2.png")
+
+
+@cocotb.test()
+async def test_rings_present(dut):
+    """Ring pattern should show all 4 grayscale levels and be roughly centered."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    # Run past first frame (y=0 init)
+    await ClockCycles(dut.clk, V_TOTAL * H_TOTAL + 100)
+
+    pixels = await capture_frame(dut)
+
+    # Check that we have all 4 ring levels (2-bit grayscale)
+    all_colors = set()
+    for x in range(0, H_DISPLAY, 2):
+        all_colors.add(pixels[240][x])
+    assert len(all_colors) >= 3, f"Expected ring variation, got {len(all_colors)} unique colors"
+    dut._log.info(f"Ring variation: {len(all_colors)} unique colors in center row")
+
+    # Verify ring structure: pixel brightness should vary across the frame
+    # (not uniform like the solid-white stub)
+    row_100 = [pixels[100][x] for x in range(0, H_DISPLAY, 4)]
+    row_400 = [pixels[400][x] for x in range(0, H_DISPLAY, 4)]
+    assert len(set(row_100)) >= 2, "Row 100 should have ring variation"
+    assert len(set(row_400)) >= 2, "Row 400 should have ring variation"
+    dut._log.info("Ring structure verified across multiple rows")

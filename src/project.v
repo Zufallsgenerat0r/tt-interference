@@ -72,10 +72,12 @@ module tt_um_kilian_interference (
   wire signed [9:0] p_by = y - center_by;
 
   // --- Distance-squared accumulators (two sources) ---
-  reg signed [17:0] r1a, r1b;
-  reg signed [18:0] r2a, r2b;
-  wire signed [19:0] ra = 2*(r1a - center_ay*2) + r2a - center_ax*2 + 2;
-  wire signed [19:0] rb = 2*(r1b - center_by*2) + r2b - center_bx*2 + 2;
+  // Narrowed accumulators: only need bits [17:14] for ring rendering.
+  // Modular wrapping doesn't affect the visual since we extract phase bits.
+  reg [13:0] r1a, r1b;
+  reg [13:0] r2a, r2b;
+  wire [14:0] ra = {r1a, 1'b0} + {1'b0, r2a};
+  wire [14:0] rb = {r1b, 1'b0} + {1'b0, r2b};
 
   always @(posedge clk) begin
     if (~rst_n) begin
@@ -92,8 +94,9 @@ module tt_um_kilian_interference (
         if (x < center_ay) r1a <= r1a + center_ay;
         if (x < center_by) r1b <= r1b + center_by;
       end else if (x == 640) begin
-        r2a <= 320*320;
-        r2b <= 320*320;
+        // 320*320 = 102400, mod 2^14 = 4096
+        r2a <= 14'd4096;
+        r2b <= 14'd4096;
       end else if (x > 640) begin
         // Source A hblank offset
         if (offset_ax > 0 && x - 10'd641 < {5'd0, offset_ax[4:0]})
@@ -121,9 +124,9 @@ module tt_um_kilian_interference (
   // ui_in[1:0] selects palette variant.
   wire [1:0] palette = ui_in[1:0];
 
-  wire [1:0] R_ring = ra[9:8]   ^ rb[9:8];
-  wire [1:0] G_ring = ra[10:9]  ^ rb[10:9];
-  wire [1:0] B_ring = ra[11:10] ^ rb[11:10];
+  wire [1:0] R_ring = ra[11:10] ^ rb[11:10];
+  wire [1:0] G_ring = ra[12:11] ^ rb[12:11];
+  wire [1:0] B_ring = ra[13:12] ^ rb[13:12];
 
   // Palette variations via simple bit manipulation
   wire [1:0] R = display_on ? (palette[0] ? G_ring : R_ring) : 2'b00;

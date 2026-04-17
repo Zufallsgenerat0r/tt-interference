@@ -16,4 +16,6 @@ test/output/
 fpga/*.json
 fpga/*.config
 fpga/*.bit
+fpga/*.png
 fpga/pll_*.v
+fpga/blink_test.*

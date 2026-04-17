@@ -10,8 +10,6 @@ Connect a VGA Pmod to the output pins. The design expects a 25.175 MHz clock. Af
 
 Use the input DIP switches to adjust parameters:
 - `ui_in[1:0]`: palette select (4 color schemes)
-- `ui_in[3:2]`: ring density (4 levels)
-- `ui_in[4]`: speed (0 = normal, 1 = half speed)
 
 ## External hardware
 

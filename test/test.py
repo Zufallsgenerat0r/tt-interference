@@ -4,7 +4,7 @@
 import os
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, RisingEdge, FallingEdge
+from cocotb.triggers import ClockCycles, RisingEdge
 
 # VGA 640x480 @ 60Hz timing constants
 H_DISPLAY = 640
@@ -145,8 +145,8 @@ async def test_vsync_period(dut):
 
 
 @cocotb.test()
-async def test_display_line_count(dut):
-    """Verify 480 display lines per frame by counting hsync edges during active video."""
+async def test_total_line_count(dut):
+    """Verify 525 total lines per frame (480 display + 45 blanking)."""
     clock = Clock(dut.clk, 39722, unit="ps")
     cocotb.start_soon(clock.start())
     await reset_dut(dut)
@@ -176,8 +176,8 @@ async def test_display_line_count(dut):
         prev_hsync = hsync
         prev_vsync = vsync
 
-    assert line_count == V_TOTAL, f"Lines per frame: expected {V_TOTAL}, got {line_count}"
-    dut._log.info(f"Lines per frame: {line_count} (expected {V_TOTAL})")
+    assert line_count == V_TOTAL, f"Total lines per frame: expected {V_TOTAL}, got {line_count}"
+    dut._log.info(f"Total lines per frame: {line_count} (expected {V_TOTAL})")
 
 
 async def capture_frame(dut):
@@ -193,20 +193,22 @@ async def capture_frame(dut):
             break
         prev_vsync = vsync
 
-    # Capture pixels for exactly one frame
+    # Wait for vsync to end + vertical back porch (V_TOP + V_SYNC lines)
+    await ClockCycles(dut.clk, (V_SYNC + V_TOP) * H_TOTAL)
+
+    # Capture exactly 480 lines of 640 active pixels
     pixels = []
-    row = []
-    prev_vsync = 1
-    for _ in range(frame_clocks + 100):
-        await RisingEdge(dut.clk)
-        hsync, vsync, r, g, b = decode_vga(dut.uo_out)
-        if not hsync and not vsync:
+    for line in range(V_DISPLAY):
+        row = []
+        # Sample 640 active pixels
+        for px in range(H_DISPLAY):
+            await RisingEdge(dut.clk)
+            _, _, r, g, b = decode_vga(dut.uo_out)
             row.append((r, g, b))
-            if len(row) == H_DISPLAY:
-                pixels.append(row)
-                row = []
-                if len(pixels) == V_DISPLAY:
-                    break
+        pixels.append(row)
+        # Skip blanking (front porch + sync + back porch = 160 clocks)
+        await ClockCycles(dut.clk, H_TOTAL - H_DISPLAY)
+
     return pixels
 
 

@@ -97,14 +97,14 @@ module tt_um_kilian_interference (
       end else if (x > 640) begin
         // Source A hblank offset
         if (offset_ax > 0 && x - 10'd641 < {5'd0, offset_ax[4:0]})
-          r2a <= r2a + 10'sd640 + offset_ax;
+          r2a <= r2a + 19'sd640 + offset_ax;
         else if (offset_ax < 0 && x - 10'd641 < {5'd0, ~offset_ax[4:0] + 5'd1})
-          r2a <= r2a - (10'sd640 + offset_ax);
+          r2a <= r2a - (19'sd640 + offset_ax);
         // Source B hblank offset (independent)
         if (offset_bx > 0 && x - 10'd641 < {5'd0, offset_bx[4:0]})
-          r2b <= r2b + 10'sd640 + offset_bx;
+          r2b <= r2b + 19'sd640 + offset_bx;
         else if (offset_bx < 0 && x - 10'd641 < {5'd0, ~offset_bx[4:0] + 5'd1})
-          r2b <= r2b - (10'sd640 + offset_bx);
+          r2b <= r2b - (19'sd640 + offset_bx);
       end else if (display_on & x == 0) begin
         r1a <= r1a + 2*p_ay + 1;
         r1b <= r1b + 2*p_by + 1;

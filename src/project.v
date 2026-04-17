@@ -124,9 +124,9 @@ module tt_um_kilian_interference (
   // ui_in[1:0] selects palette variant.
   wire [1:0] palette = ui_in[1:0];
 
-  wire [1:0] R_ring = ra[11:10] ^ rb[11:10];
-  wire [1:0] G_ring = ra[12:11] ^ rb[12:11];
-  wire [1:0] B_ring = ra[13:12] ^ rb[13:12];
+  wire [1:0] R_ring = ra[12:11] ^ rb[12:11];
+  wire [1:0] G_ring = ra[13:12] ^ rb[13:12];
+  wire [1:0] B_ring = ra[14:13] ^ rb[14:13];
 
   // Palette variations via simple bit manipulation
   wire [1:0] R = display_on ? (palette[0] ? G_ring : R_ring) : 2'b00;

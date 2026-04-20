@@ -1,0 +1,426 @@
+# SPDX-FileCopyrightText: (c) 2026 Kilian
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import ClockCycles, RisingEdge
+
+# VGA 640x480 @ 60Hz timing constants
+H_DISPLAY = 640
+H_FRONT = 16
+H_SYNC = 96
+H_BACK = 48
+H_TOTAL = H_DISPLAY + H_FRONT + H_SYNC + H_BACK  # 800
+
+V_DISPLAY = 480
+V_BOTTOM = 10
+V_SYNC = 2
+V_TOP = 33
+V_TOTAL = V_DISPLAY + V_BOTTOM + V_SYNC + V_TOP  # 525
+
+LATTICE = 16  # dot spacing in pixels
+DOT_R = 2     # Chebyshev radius; 5x5 square dot
+
+# uo_out bit positions (TinyVGA Pmod)
+BIT_R1 = 0
+BIT_G1 = 1
+BIT_B1 = 2
+BIT_VSYNC = 3
+BIT_R0 = 4
+BIT_G0 = 5
+BIT_B0 = 6
+BIT_HSYNC = 7
+
+
+def decode_vga(uo_out):
+    """Decode uo_out into VGA signals."""
+    val = int(uo_out.value)
+    hsync = (val >> BIT_HSYNC) & 1
+    vsync = (val >> BIT_VSYNC) & 1
+    r = ((val >> BIT_R1) & 1) << 1 | ((val >> BIT_R0) & 1)
+    g = ((val >> BIT_G1) & 1) << 1 | ((val >> BIT_G0) & 1)
+    b = ((val >> BIT_B1) & 1) << 1 | ((val >> BIT_B0) & 1)
+    return hsync, vsync, r, g, b
+
+
+async def reset_dut(dut):
+    """Standard reset sequence."""
+    dut.ena.value = 1
+    dut.ui_in.value = 0
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
+    await RisingEdge(dut.clk)
+
+
+# --- VGA timing tests (unchanged from tt-interference) -----------------------
+
+@cocotb.test()
+async def test_hsync_period(dut):
+    """HSYNC must pulse every 800 pixel clocks."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    prev_hsync = 0
+    for _ in range(H_TOTAL + 10):
+        await RisingEdge(dut.clk)
+        hsync, _, _, _, _ = decode_vga(dut.uo_out)
+        if hsync and not prev_hsync:
+            break
+        prev_hsync = hsync
+
+    count = 0
+    prev_hsync = 1
+    for _ in range(H_TOTAL + 10):
+        await RisingEdge(dut.clk)
+        count += 1
+        hsync, _, _, _, _ = decode_vga(dut.uo_out)
+        if hsync and not prev_hsync:
+            break
+        prev_hsync = hsync
+
+    assert count == H_TOTAL, f"HSYNC period: expected {H_TOTAL}, got {count}"
+    dut._log.info(f"HSYNC period: {count} clocks (expected {H_TOTAL})")
+
+
+@cocotb.test()
+async def test_hsync_pulse_width(dut):
+    """HSYNC pulse must be 96 clocks wide."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    for _ in range(H_TOTAL + 10):
+        await RisingEdge(dut.clk)
+        hsync, _, _, _, _ = decode_vga(dut.uo_out)
+        if hsync:
+            break
+
+    width = 1
+    for _ in range(H_TOTAL):
+        await RisingEdge(dut.clk)
+        hsync, _, _, _, _ = decode_vga(dut.uo_out)
+        if hsync:
+            width += 1
+        else:
+            break
+
+    assert width == H_SYNC, f"HSYNC width: expected {H_SYNC}, got {width}"
+    dut._log.info(f"HSYNC pulse width: {width} clocks (expected {H_SYNC})")
+
+
+@cocotb.test()
+async def test_vsync_period(dut):
+    """VSYNC must pulse every 525 lines (525 * 800 = 420000 clocks)."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    expected_period = V_TOTAL * H_TOTAL
+
+    prev_vsync = 0
+    for _ in range(expected_period + 100):
+        await RisingEdge(dut.clk)
+        _, vsync, _, _, _ = decode_vga(dut.uo_out)
+        if vsync and not prev_vsync:
+            break
+        prev_vsync = vsync
+
+    count = 0
+    prev_vsync = 1
+    for _ in range(expected_period + 100):
+        await RisingEdge(dut.clk)
+        count += 1
+        _, vsync, _, _, _ = decode_vga(dut.uo_out)
+        if vsync and not prev_vsync:
+            break
+        prev_vsync = vsync
+
+    assert count == expected_period, f"VSYNC period: expected {expected_period}, got {count}"
+    dut._log.info(f"VSYNC period: {count} clocks (expected {expected_period})")
+
+
+@cocotb.test()
+async def test_total_line_count(dut):
+    """Verify 525 total lines per frame (480 display + 45 blanking)."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    frame_clocks = V_TOTAL * H_TOTAL
+
+    prev_vsync = 0
+    for _ in range(frame_clocks + 100):
+        await RisingEdge(dut.clk)
+        _, vsync, _, _, _ = decode_vga(dut.uo_out)
+        if vsync and not prev_vsync:
+            break
+        prev_vsync = vsync
+
+    line_count = 0
+    prev_hsync = 0
+    prev_vsync = 1
+    for _ in range(frame_clocks + 100):
+        await RisingEdge(dut.clk)
+        hsync, vsync, _, _, _ = decode_vga(dut.uo_out)
+        if hsync and not prev_hsync:
+            line_count += 1
+        if vsync and not prev_vsync:
+            break
+        prev_hsync = hsync
+        prev_vsync = vsync
+
+    assert line_count == V_TOTAL, f"Total lines per frame: expected {V_TOTAL}, got {line_count}"
+    dut._log.info(f"Total lines per frame: {line_count} (expected {V_TOTAL})")
+
+
+# --- Frame capture helpers ---------------------------------------------------
+
+async def capture_frame(dut):
+    """Capture one full VGA frame as a 640x480 array of (r, g, b) tuples."""
+    frame_clocks = V_TOTAL * H_TOTAL
+
+    prev_vsync = 0
+    for _ in range(frame_clocks + 100):
+        await RisingEdge(dut.clk)
+        _, vsync, _, _, _ = decode_vga(dut.uo_out)
+        if vsync and not prev_vsync:
+            break
+        prev_vsync = vsync
+
+    await ClockCycles(dut.clk, (V_SYNC + V_TOP) * H_TOTAL)
+
+    pixels = []
+    for _line in range(V_DISPLAY):
+        row = []
+        for _px in range(H_DISPLAY):
+            await RisingEdge(dut.clk)
+            _, _, r, g, b = decode_vga(dut.uo_out)
+            row.append((r, g, b))
+        pixels.append(row)
+        await ClockCycles(dut.clk, H_TOTAL - H_DISPLAY)
+
+    return pixels
+
+
+def save_frame_png(pixels, filename):
+    """Save captured frame as PNG."""
+    from PIL import Image
+    h = len(pixels)
+    w = len(pixels[0]) if h > 0 else 0
+    img = Image.new("RGB", (w, h))
+    for y in range(h):
+        for x in range(w):
+            r, g, b = pixels[y][x]
+            img.putpixel((x, y), (r * 85, g * 85, b * 85))
+    os.makedirs("output", exist_ok=True)
+    img.save(f"output/{filename}")
+    return img
+
+
+def is_lit(rgb):
+    r, g, b = rgb
+    return r > 0 or g > 0 or b > 0
+
+
+# --- Dot-lattice demo tests --------------------------------------------------
+
+@cocotb.test()
+async def test_frame_dump(dut):
+    """Capture a frame and save as PNG for visual inspection."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    # Run past first frame (y=0 init happens here)
+    await ClockCycles(dut.clk, V_TOTAL * H_TOTAL + 100)
+
+    pixels = await capture_frame(dut)
+    assert len(pixels) == V_DISPLAY, f"Expected {V_DISPLAY} rows, got {len(pixels)}"
+    save_frame_png(pixels, "frame_waves.png")
+    dut._log.info("Frame saved to output/frame_waves.png")
+
+
+@cocotb.test()
+async def test_dot_lattice_density(dut):
+    """Foreground coverage should land in the expected dot-lattice range.
+
+    40x30 dots * 5x5 px = 30000 lit pixels out of 307200 ≈ 9.8%.
+    Allow 3%..20% — loose because displacement, clamp saturation, and
+    edge-clipped cells perturb the count.
+    """
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    await ClockCycles(dut.clk, V_TOTAL * H_TOTAL + 100)
+    pixels = await capture_frame(dut)
+
+    lit = 0
+    total = V_DISPLAY * H_DISPLAY
+    for row in pixels:
+        for px in row:
+            if is_lit(px):
+                lit += 1
+
+    pct = lit * 100 / total
+    dut._log.info(f"Lit pixels: {lit}/{total} ({pct:.2f}%)")
+    assert 3.0 < pct < 20.0, f"Dot-lattice density out of range: {pct:.2f}%"
+
+
+@cocotb.test()
+async def test_deep_background_black(dut):
+    """Corner pixels of each 16x16 cell are almost always black.
+
+    At local (0..1, 0..1), a dot would have to be displaced <= (-6,-6) to
+    reach, which requires both sources to contribute max negative.
+    Assert >= 98% black in the deep-corner 2x2 region of each cell.
+    """
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    await ClockCycles(dut.clk, V_TOTAL * H_TOTAL + 100)
+    pixels = await capture_frame(dut)
+
+    corner_total = 0
+    corner_lit = 0
+    for y in range(V_DISPLAY):
+        if y % LATTICE >= 2:
+            continue
+        for x in range(H_DISPLAY):
+            if x % LATTICE >= 2:
+                continue
+            corner_total += 1
+            if is_lit(pixels[y][x]):
+                corner_lit += 1
+
+    pct_lit = corner_lit * 100 / max(corner_total, 1)
+    dut._log.info(f"Deep-corner lit: {corner_lit}/{corner_total} ({pct_lit:.2f}%)")
+    assert pct_lit < 2.0, f"Too many lit corner pixels: {pct_lit:.2f}%"
+
+
+@cocotb.test()
+async def test_dots_displace_between_frames(dut):
+    """Over a 16-frame span the displacement field should change
+    non-trivially (the spiral pointer advances)."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    frame_clocks = V_TOTAL * H_TOTAL
+
+    await ClockCycles(dut.clk, frame_clocks * 2 + 100)
+    pixels_a = await capture_frame(dut)
+
+    await ClockCycles(dut.clk, frame_clocks * 16)
+    pixels_b = await capture_frame(dut)
+
+    differences = 0
+    samples = 0
+    for y in range(100, V_DISPLAY, 3):
+        for x in range(100, H_DISPLAY, 3):
+            samples += 1
+            if pixels_a[y][x] != pixels_b[y][x]:
+                differences += 1
+
+    pct = differences * 100 / max(samples, 1)
+    dut._log.info(f"Frame-diff: {differences}/{samples} ({pct:.2f}%)")
+    assert differences > 0, "Frames should differ — the spiral pointer should be moving"
+
+
+@cocotb.test()
+async def test_multi_frame_dump(dut):
+    """Capture frames at several spiral positions by force-setting
+    ptr_counter. Sim-time cheap — forcing lets us jump straight to late
+    spiral states without simulating thousands of idle frames."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    # Freeze the internal counter so our forced values stick.
+    dut.ui_in.value = 1 << 2  # freeze
+    frame_clocks = V_TOTAL * H_TOTAL
+    await ClockCycles(dut.clk, 32)
+
+    # ptr_counter values sampling one half of the full spiral cycle.
+    for i, pc in enumerate([2, 64, 200, 400, 800, 1024]):
+        try:
+            dut.user_project.ptr_counter.value = pc
+        except AttributeError:
+            dut._log.info("ptr_counter not accessible (GL sim?); skipping")
+            return
+        await ClockCycles(dut.clk, 16)
+        pixels = await capture_frame(dut)
+        save_frame_png(pixels, f"frame_waves_{i}_pc{pc}.png")
+        dut._log.info(f"Saved frame {i} at ptr_counter={pc}")
+
+    dut._log.info("Multi-frame dump complete — check output/frame_waves_*_pc*.png")
+
+
+@cocotb.test()
+async def test_spiral_pointer_moves(dut):
+    """Probe internal center_ax/ay over time; expect non-trivial motion."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    frame_clocks = V_TOTAL * H_TOTAL
+
+    def read_centre():
+        try:
+            ax = int(dut.user_project.center_ax.value.signed_integer)
+            ay = int(dut.user_project.center_ay.value.signed_integer)
+        except AttributeError:
+            return None, None
+        return ax, ay
+
+    samples = []
+    for _ in range(32):
+        ax, ay = read_centre()
+        if ax is None:
+            dut._log.info("center_ax not accessible (likely GL sim); skipping")
+            return
+        samples.append((ax, ay))
+        await ClockCycles(dut.clk, frame_clocks)
+
+    distinct = len(set(samples))
+    dut._log.info(f"Distinct centre positions sampled: {distinct}/{len(samples)}")
+    assert distinct >= 4, f"Expected >= 4 distinct centre positions; got {distinct}"
+
+    displaced = [s for s in samples if s != (320, 240)]
+    assert len(displaced) > 0, "Pointer never left screen centre"
+
+
+@cocotb.test()
+async def test_freeze_holds_pointer(dut):
+    """With ui_in[2]=1 from reset, the spiral must not advance frame-to-frame."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    dut.ui_in.value = 1 << 2  # freeze bit
+    frame_clocks = V_TOTAL * H_TOTAL
+
+    def read_centre():
+        try:
+            ax = int(dut.user_project.center_ax.value.signed_integer)
+            ay = int(dut.user_project.center_ay.value.signed_integer)
+        except AttributeError:
+            return None
+        return (ax, ay)
+
+    samples = []
+    for _ in range(6):
+        await ClockCycles(dut.clk, frame_clocks)
+        c = read_centre()
+        if c is None:
+            dut._log.info("center_ax not accessible (likely GL sim); skipping")
+            return
+        samples.append(c)
+
+    assert len(set(samples)) == 1, f"Freeze should hold centre stable; got {samples}"
+    dut._log.info(f"Freeze holds centre at {samples[0]} across {len(samples)} frames")

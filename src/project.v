@@ -57,73 +57,39 @@ module tt_um_kilian_waves (
       ptr_counter <= ptr_counter + 1;
   end
 
-  // --- Block 0: spiral virtual pointer ---
-  // theta rotates; amp grows then shrinks (triangle), giving a spiral that
-  // winds outward and back. ui_in[3] halves theta speed.
-  // Retraced spiral driver: a phase counter ramps 0→511→0, giving one full
-  // out-and-back cycle. Both theta and radius derive from this phase, so
-  // when the phase reverses, the pointer retraces exactly the same path
-  // backwards. Fast: 17 s full cycle (8.5 s out, 8.5 s back), ~8.5 s per
-  // rotation. Slow: 34 s cycle, ~17 s per rotation (per-frame motion is
-  // bursty in slow mode — motion halves but can't be fractional).
-  wire [9:0] phase_raw = ui_in[3] ? ptr_counter[10:1] : ptr_counter[9:0];
-  wire [8:0] phase     = phase_raw[9] ? (9'd511 - phase_raw[8:0])
-                                      : phase_raw[8:0];       // 0..511..0
+  // --- Block 0: Lissajous virtual pointer ---
+  // Multiplier-free trajectory: two independent triangle waves at coprime
+  // frequencies (3:5) drive x and y. Constant-coefficient multiplies fold
+  // to wire+add, so the whole pointer pipeline contains no DSP cells.
+  // Full Lissajous cycle = 1024 frames ≈ 17 s at 60 Hz; ui_in[3] halves
+  // the rate (≈ 34 s cycle).
+  wire [13:0] pc3 = {ptr_counter, 1'b0} + {2'b00, ptr_counter};   // 3 × pc
+  wire [14:0] pc5 = {ptr_counter, 2'b00} + {3'b000, ptr_counter}; // 5 × pc
 
-  // 9-bit theta_full = phase, giving exactly one theta rotation per outward
-  // ramp and one backward rotation during retrace.
-  wire [8:0] theta_full   = phase;
-  wire [7:0] theta_hi     = theta_full[8:1];
-  wire       theta_lo     = theta_full[0];
+  wire [9:0] px_raw = ui_in[3] ? pc3[10:1] : pc3[9:0];
+  wire [9:0] py_raw = ui_in[3] ? pc5[10:1] : pc5[9:0];
 
-  wire [8:0] theta90_full = theta_full + 9'd128;   // 90° of 512
-  wire [7:0] theta90_hi   = theta90_full[8:1];
-  wire       theta90_lo   = theta90_full[0];
-  // 8-bit theta_hi triangle (amp ±126, steps of 2 per theta_hi). theta_lo
-  // interpolates half-steps so cos_s moves by 1 each frame.
-  wire [6:0] cos_mag = theta_hi[6]
-      ? {theta_hi[5:0], 1'b0}
-      : (7'd126 - {theta_hi[5:0], 1'b0});
-  wire signed [8:0] cos_s_coarse = (theta_hi[7] ^ theta_hi[6])
-      ? -$signed({2'b00, cos_mag})
-      :  $signed({2'b00, cos_mag});
-  wire cos_at_bnd = (theta_hi[5:0] == 6'd63);
-  wire signed [8:0] cos_delta = cos_at_bnd ? 9'sd0
-                              : (theta_hi[7] ? 9'sd2 : -9'sd2);
-  wire signed [8:0] cos_s = theta_lo ? (cos_s_coarse + (cos_delta >>> 1))
-                                     : cos_s_coarse;
+  // Fold each into a 0..511..0 triangle.
+  wire [8:0] px_tri = px_raw[9] ? (9'd511 - px_raw[8:0]) : px_raw[8:0];
+  wire [8:0] py_tri = py_raw[9] ? (9'd511 - py_raw[8:0]) : py_raw[8:0];
 
-  wire [6:0] sin_mag = theta90_hi[6]
-      ? {theta90_hi[5:0], 1'b0}
-      : (7'd126 - {theta90_hi[5:0], 1'b0});
-  wire signed [8:0] sin_s_coarse = (theta90_hi[7] ^ theta90_hi[6])
-      ? -$signed({2'b00, sin_mag})
-      :  $signed({2'b00, sin_mag});
-  wire sin_at_bnd = (theta90_hi[5:0] == 6'd63);
-  wire signed [8:0] sin_delta = sin_at_bnd ? 9'sd0
-                              : (theta90_hi[7] ? 9'sd2 : -9'sd2);
-  wire signed [8:0] sin_s = theta90_lo ? (sin_s_coarse + (sin_delta >>> 1))
-                                       : sin_s_coarse;
+  // Signed amplitude in [-64, +63]; computed in 10-bit signed throughout
+  // so the subtraction stays signed (Verilog concats are unsigned and
+  // would silently demote a left-shift trick).
+  wire signed [9:0] offset_x = $signed({3'b000, px_tri[8:2]}) - 10'sd64;
+  wire signed [9:0] offset_y = $signed({3'b000, py_tri[8:2]}) - 10'sd64;
 
-  // Radius shares the phase counter: as phase grows, radius grows; as phase
-  // retreats, radius shrinks. Floor of 64 keeps per-frame motion ≥ 1 px so
-  // the retrace is smooth even at the inner end of the path.
-  wire [6:0] radius = 7'd64 + {3'b000, phase[8:5]};  // 64..79..64
+  wire signed [9:0] ptr_x_raw = 10'sd320 + offset_x;  // [256, 383]
+  wire signed [9:0] ptr_y_raw = 10'sd240 + offset_y;  // [176, 303]
 
-  // cos_s (±126) × radius (64..79) → ±9954. >>> 6 gives ±155, inside
-  // the clamp rails at ±158.
-  wire signed [15:0] dx_full = cos_s * $signed({1'b0, radius});
-  wire signed [15:0] dy_full = sin_s * $signed({1'b0, radius});
-  wire signed [12:0] ptr_x_raw = 13'sd320 + (dx_full >>> 6);
-  wire signed [12:0] ptr_y_raw = 13'sd240 + (dy_full >>> 6);
-  // Clamps chosen so |offset_ax|, |offset_bx| ≤ 158 — fits inside the 159
-  // available hblank cycles for the r2a/r2b fix-up below.
-  wire signed [9:0]  ptr_x = (ptr_x_raw < 13'sd162) ? 10'sd162
-                           : (ptr_x_raw > 13'sd478) ? 10'sd478
-                           : ptr_x_raw[9:0];
-  wire signed [9:0]  ptr_y = (ptr_y_raw < 13'sd32)  ? 10'sd32
-                           : (ptr_y_raw > 13'sd448) ? 10'sd448
-                           : ptr_y_raw[9:0];
+  // Clamps guard the hblank fix-up counter (|offset| ≤ 64 fits in ≤ 64 of
+  // 159 hblank cycles). Never fire during normal operation.
+  wire signed [9:0]  ptr_x = (ptr_x_raw < 10'sd256) ? 10'sd256
+                           : (ptr_x_raw > 10'sd383) ? 10'sd383
+                           : ptr_x_raw;
+  wire signed [9:0]  ptr_y = (ptr_y_raw < 10'sd176) ? 10'sd176
+                           : (ptr_y_raw > 10'sd303) ? 10'sd303
+                           : ptr_y_raw;
 
   // --- Source centres: A = pointer, B = point-mirror ---
   wire signed [9:0] center_ax = ptr_x;
@@ -143,7 +109,7 @@ module tt_um_kilian_waves (
   wire [14:0] rb = {r1b, 1'b0} + {1'b0, r2b};
 
   // Offset relative to screen centre, used by the hblank fix-up branch.
-  // |offset| bounded to ≤ 158 via the ptr_x clamp above.
+  // |offset| bounded to ≤ 64 via the ptr_x clamp above (Lissajous amp).
   wire signed [9:0] offset_ax = center_ax - 10'sd320;
   wire signed [9:0] offset_bx = center_bx - 10'sd320;
   wire [9:0] abs_off_ax = offset_ax[9] ? (10'd0 - offset_ax) : offset_ax;
@@ -163,28 +129,40 @@ module tt_um_kilian_waves (
         if (x < center_ay) r1a <= r1a + center_ay;
         if (x < center_by) r1b <= r1b + center_by;
       end else if (x == 640) begin
+        // r2a: seed = 320² mod 2¹⁴ = 4096; walk produces cax² for x=0 use.
+        // r2b: seed = 319² mod 2¹⁴ = 3457; walk uses 638 (not 640) so the
+        // result is (1-cbx)² mod 2¹⁴ — the predecessor state the time-muxed
+        // 2-step delta formula needs (r2b first updates at even x=2).
         r2a <= 14'd4096;
-        r2b <= 14'd4096;
+        r2b <= 14'd3457;
       end else if (x > 640) begin
-        // During hblank, walk r2a from 320² toward center_ax² with |offset|
-        // increments. Needs full 10-bit magnitude to support the spiral's
-        // ±158 range (original tt-interference only supported ±15).
+        // Hblank walk. r2a → cax², r2b → (1-cbx)². With Lissajous |offset|
+        // ≤ 64, the walk uses ≤ 64 of the 159 hblank cycles available.
         if (offset_ax[9] == 1'b0 && (x - 10'd641) < abs_off_ax)
           r2a <= r2a + 19'sd640 + offset_ax;
         else if (offset_ax[9] == 1'b1 && (x - 10'd641) < abs_off_ax)
           r2a <= r2a - (19'sd640 + offset_ax);
         if (offset_bx[9] == 1'b0 && (x - 10'd641) < abs_off_bx)
-          r2b <= r2b + 19'sd640 + offset_bx;
+          r2b <= r2b + 19'sd638 + offset_bx;
         else if (offset_bx[9] == 1'b1 && (x - 10'd641) < abs_off_bx)
-          r2b <= r2b - (19'sd640 + offset_bx);
+          r2b <= r2b - (19'sd638 + offset_bx);
       end else if (display_on & x == 0) begin
         // Delta uses 2*(Y-1-cy)+1 = 2*p_ay-1 because y has already
         // advanced to Y when this update fires at x==0.
         r1a <= r1a + 2*p_ay - 1;
         r1b <= r1b + 2*p_by - 1;
       end else if (display_on) begin
-        r2a <= r2a + 2*p_ax + 1;
-        r2b <= r2b + 2*p_bx + 1;
+        // Time-muxed r2 update: one shared 14-bit adder, parity routes the
+        // write. r2a updates at odd x (1,3,…,15,…) starting cleanly from
+        // cax²; r2b updates at even x (2,4,…) starting from (1-cbx)² (set
+        // by the modified hblank walk above). Both use the 2-step delta
+        // 4·p (since each accumulator advances by 2 px between updates).
+        // Net: A is 1 px stale at latch time (x=15), B is fresh — 6 % of
+        // a cell width, expected invisible.
+        if (x[0] == 1'b1)
+          r2a <= r2a + {{2{p_ax[9]}}, p_ax, 2'b00};
+        else
+          r2b <= r2b + {{2{p_bx[9]}}, p_bx, 2'b00};
       end
     end
   end

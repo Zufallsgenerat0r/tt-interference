@@ -313,12 +313,43 @@ module tt_um_kilian_waves (
     else if (pixel_ce) dot <= dot_now;  // Sample output only on pixel cycle.
   end
 
-  // --- Block D: output.
-  // Palette hardwired to white.
+  // --- Block D: per-pixel amplitude from r_sel top bits.
+  // amp_a / amp_b latch r_sel[14:12] once per VGA pixel (A on phase=0, B on
+  // phase=1). Numpy's triangle-fold bit (position 15 of r_sel) doesn't exist
+  // in the 15-bit r_sel for this parameter set — phase_lat is 12-bit after
+  // the >> 3, so sign bit 12 is always 0 and the fold is a no-op. Skip it.
+  reg [2:0] amp_a, amp_b;
+  always @(posedge clk) begin
+    if (~rst_n) begin
+      amp_a <= 0;
+      amp_b <= 0;
+    end else if (phase == 1'b0) begin
+      amp_a <= r_sel[14:12];
+    end else begin
+      amp_b <= r_sel[14:12];
+    end
+  end
+
+  // Modular sum — interference fringes appear where sources sum wraps around.
+  wire [2:0] level = amp_a + amp_b;
+
+  // Morph-blend toward binary: lifted = level + ((7 − level) × env) >> 4.
+  // env=0 → lifted = level (pure amplitude modulation); env=15 → lifted = 7
+  // for any level (binary full — matches F). Small 3×4 unsigned multiplier.
+  wire [2:0] amp_delta = 3'd7 - level;
+  wire [6:0] amp_lift_full = amp_delta * morph_env;
+  wire [2:0] amp_lift = amp_lift_full[6:4];
+  wire [3:0] lifted_raw = {1'b0, level} + {1'b0, amp_lift};
+  wire [2:0] lifted = lifted_raw[3] ? 3'b111 : lifted_raw[2:0];
+
+  // --- Block E: output.
+  // Palette hardwired to white; each channel carries the 2-bit amplitude
+  // slice lifted[2:1], giving 4 VGA levels.
   wire dot_on = display_on & dot;
-  wire [1:0] R = dot_on ? 2'b11 : 2'b00;
-  wire [1:0] G = dot_on ? 2'b11 : 2'b00;
-  wire [1:0] B = dot_on ? 2'b11 : 2'b00;
+  wire [1:0] vga_amp = lifted[2:1];
+  wire [1:0] R = dot_on ? vga_amp : 2'b00;
+  wire [1:0] G = dot_on ? vga_amp : 2'b00;
+  wire [1:0] B = dot_on ? vga_amp : 2'b00;
 
   // TinyVGA Pmod: {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]}
   assign uo_out = {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]};

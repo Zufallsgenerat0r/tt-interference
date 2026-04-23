@@ -392,6 +392,60 @@ async def test_morph_env_zero_static_lattice(dut):
 
 
 @cocotb.test()
+async def test_morph_env_full_binary(dut):
+    """At morph_env=15 every lit pixel is fully saturated (VGA level 3 on all
+    three channels) — the amplitude path lifts level to binary full."""
+    clock = Clock(dut.clk, CLK_PERIOD_PS, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    await ClockCycles(dut.clk, 64)
+    try:
+        dut.user_project.ptr_counter.value = 240  # env=15
+    except AttributeError:
+        dut._log.info("ptr_counter not accessible (GL sim?); skipping")
+        return
+    await ClockCycles(dut.clk, FRAME_INT + 200)
+    pixels = await capture_frame(dut)
+
+    partial = 0
+    lit_any = 0
+    for row in pixels:
+        for (r, g, b) in row:
+            if r or g or b:
+                lit_any += 1
+                if r != 3 or g != 3 or b != 3:
+                    partial += 1
+    assert lit_any > 0, "no lit pixels captured"
+    assert partial == 0, f"{partial}/{lit_any} lit pixels not at full brightness at env=15"
+
+
+@cocotb.test()
+async def test_morph_env_zero_amp_variation(dut):
+    """At morph_env=0 the amplitude path modulates dot brightness, so the
+    frame must contain at least two distinct non-black VGA levels."""
+    clock = Clock(dut.clk, CLK_PERIOD_PS, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    await ClockCycles(dut.clk, 64)
+    try:
+        dut.user_project.ptr_counter.value = 0  # env=0
+    except AttributeError:
+        dut._log.info("ptr_counter not accessible (GL sim?); skipping")
+        return
+    await ClockCycles(dut.clk, FRAME_INT + 200)
+    pixels = await capture_frame(dut)
+
+    levels = set()
+    for row in pixels:
+        for (r, g, b) in row:
+            if r or g or b:
+                levels.add(r)
+    assert len(levels) >= 2, f"expected varying brightness at env=0; got levels {sorted(levels)}"
+
+
+@cocotb.test()
 async def test_morph_env_cycle(dut):
     """morph_env must triangle-fold cleanly: at pc[8:4]=0 and pc[8:4]=31 → env=0;
     at pc[8:4]=15 and pc[8:4]=16 → env=15."""

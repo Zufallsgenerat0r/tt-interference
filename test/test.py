@@ -452,6 +452,42 @@ async def test_morph_env_zero_amp_variation(dut):
 
 
 @cocotb.test()
+async def test_breath_dims_on_low_half(dut):
+    """Breath envelope: on the low half of the triangle cycle (breath_full=0),
+    every lit dot is half-brightness; on the high half it's full. Pick two
+    pc values with the same morph_env (=15, binary full amplitude) but
+    different breath states, so the ONLY difference is the breath path."""
+    clock = Clock(dut.clk, CLK_PERIOD_PS, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    await ClockCycles(dut.clk, 64)
+    try:
+        _ = dut.user_project.breath_full.value
+    except AttributeError:
+        dut._log.info("breath_full not accessible (GL sim?); skipping")
+        return
+
+    # pc=240   → morph_env=15, pc[11:10]=00 → breath_full=0 (dim half).
+    # pc=1264  → morph_env=15, pc[11:10]=01 → breath_full=1 (full half).
+    dut.user_project.ptr_counter.value = 1264
+    await ClockCycles(dut.clk, FRAME_INT + 200)
+    assert int(dut.user_project.breath_full.value) == 1, "pc=1264 should be breath_full"
+    pixels_full = await capture_frame(dut)
+
+    dut.user_project.ptr_counter.value = 240
+    await ClockCycles(dut.clk, FRAME_INT + 200)
+    assert int(dut.user_project.breath_full.value) == 0, "pc=240 should be breath_dim"
+    pixels_dim = await capture_frame(dut)
+
+    peak_full = max(b for row in pixels_full for (_, _, b) in row)
+    peak_dim  = max(b for row in pixels_dim  for (_, _, b) in row)
+    assert peak_full == 3, f"expected peak B=3 on breath_full; got {peak_full}"
+    assert peak_dim < peak_full, \
+        f"breath_dim should attenuate; full={peak_full} dim={peak_dim}"
+
+
+@cocotb.test()
 async def test_pattern_mode_centres(dut):
     """Pattern mode mux: verify each of the 4 B-source formulas is actually
     used. Force ptr_counter so pattern_mode takes each value and read

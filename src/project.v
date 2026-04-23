@@ -370,9 +370,25 @@ module tt_um_kilian_waves (
     end
   end
 
-  // Map per-source lifted amplitude (0..7) → VGA range (0..3).
-  wire [1:0] amp_a_vga = amp_a_lifted[2:1];
-  wire [1:0] amp_b_vga = amp_b_lifted[2:1];
+  // --- Breath envelope: 2-level strobe that halves every dot's brightness on
+  // the triangle's low half. Trades a smooth 16-step ramp for ~6 cells of
+  // logic; over ~68 s at BREATH_SHIFT=7 the pulse still reads as a breath
+  // rather than a flicker. breath_full is true when the triangle-folded
+  // 5-bit counter env ≥ 8, which is exactly raw[4] ⊕ raw[3].
+  //
+  // Shift 7 places the breath slice at ptr_counter[11:7] so it doesn't share
+  // bits with morph_raw (pc[8:4]); otherwise breath would be a deterministic
+  // function of morph_env and the two envelopes would look locked together.
+  localparam BREATH_SHIFT = 7;
+  wire [4:0] breath_raw = ptr_counter[BREATH_SHIFT+4 : BREATH_SHIFT];
+  wire breath_full = breath_raw[4] ^ breath_raw[3];
+
+  wire [2:0] amp_a_breathed = breath_full ? amp_a_lifted : {1'b0, amp_a_lifted[2:1]};
+  wire [2:0] amp_b_breathed = breath_full ? amp_b_lifted : {1'b0, amp_b_lifted[2:1]};
+
+  // Map per-source lifted+breathed amplitude (0..7) → VGA range (0..3).
+  wire [1:0] amp_a_vga = amp_a_breathed[2:1];
+  wire [1:0] amp_b_vga = amp_b_breathed[2:1];
 
   // --- Block E: palette lookup.
   // pal_idx cycles 0..15 every 2^PALETTE_SHIFT frames; full hue ring = 1024

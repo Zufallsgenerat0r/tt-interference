@@ -395,18 +395,17 @@ async def test_morph_env_zero_static_lattice(dut):
 
 @cocotb.test()
 async def test_morph_env_full_binary(dut):
-    """At morph_env=15 every lit pixel is at max blue (VGA level 3).
-    The hue palette rotates around the blue corner of the VGA cube, so
-    the B channel is always at full gain — at env=15 the amplitude is
-    also binary-full, so B must be 3 on every lit pixel regardless of
-    which palette entry is active."""
+    """At morph_env=15 AND breath_full=1, every lit pixel is at max blue
+    (VGA level 3). Pick pc=1264: morph_raw=pc[8:4]=15, and pc[11:10]=01 so
+    breath_full=pc[11]^pc[10]=1. (pc=240 would break on the breath
+    halving introduced in Step 7.)"""
     clock = Clock(dut.clk, CLK_PERIOD_PS, unit="ps")
     cocotb.start_soon(clock.start())
     await reset_dut(dut)
 
     await ClockCycles(dut.clk, 64)
     try:
-        dut.user_project.ptr_counter.value = 240  # env=15
+        dut.user_project.ptr_counter.value = 1264  # env=15 + breath_full=1
     except AttributeError:
         dut._log.info("ptr_counter not accessible (GL sim?); skipping")
         return

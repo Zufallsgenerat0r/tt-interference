@@ -393,7 +393,43 @@ module tt_um_kilian_waves (
   // (the palette is a rotation around the blue corner of the VGA cube), so
   // hardwire pal_b = 3 and save a 2-bit mux per-entry and a scale stage.
   localparam PALETTE_SHIFT = 6;
-  wire [3:0] pal_idx   = ptr_counter[PALETTE_SHIFT+3 : PALETTE_SHIFT];
+  wire [3:0] pal_idx_cur = ptr_counter[PALETTE_SHIFT+3 : PALETTE_SHIFT];
+
+  // --- 4×4 Bayer dither: shift the active palette index forward by 1 on the
+  // fraction of pixels whose spatial threshold is below the sub-dwell phase.
+  // Over each 64-frame palette dwell the blend fraction walks 0/16 → 15/16 in
+  // 4-frame sub-steps, so the eye reads the hue change as a continuous fade
+  // rather than a 1-frame jump. Cheap because no second LUT is needed — the
+  // dither just shifts the LUT index.
+  wire [3:0] blend_phase = ptr_counter[PALETTE_SHIFT-1 : PALETTE_SHIFT-4];
+  wire [1:0] bx = x[1:0];
+  wire [1:0] by = y[1:0];
+  function [3:0] bayer;
+    input [1:0] bx, by;
+    begin
+      case ({by, bx})
+        4'd0:  bayer = 4'd0;
+        4'd1:  bayer = 4'd8;
+        4'd2:  bayer = 4'd2;
+        4'd3:  bayer = 4'd10;
+        4'd4:  bayer = 4'd12;
+        4'd5:  bayer = 4'd4;
+        4'd6:  bayer = 4'd14;
+        4'd7:  bayer = 4'd6;
+        4'd8:  bayer = 4'd3;
+        4'd9:  bayer = 4'd11;
+        4'd10: bayer = 4'd1;
+        4'd11: bayer = 4'd9;
+        4'd12: bayer = 4'd15;
+        4'd13: bayer = 4'd7;
+        4'd14: bayer = 4'd13;
+        default: bayer = 4'd5;
+      endcase
+    end
+  endfunction
+
+  wire pick_next = bayer(bx, by) < blend_phase;
+  wire [3:0] pal_idx   = pick_next ? (pal_idx_cur + 4'd1) : pal_idx_cur;
   wire [3:0] pal_idx_b = pal_idx + 4'd8;  // +8 = complementary (180° hue)
 
   function [3:0] pal_lookup;  // returns {pal_r, pal_g} for a given index

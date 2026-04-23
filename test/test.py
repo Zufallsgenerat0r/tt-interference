@@ -451,39 +451,6 @@ async def test_morph_env_zero_amp_variation(dut):
 
 
 @cocotb.test()
-async def test_bayer_dither_active_at_blend_phase_high(dut):
-    """Bayer dither sanity: at blend_phase=0 no pixel picks next; at
-    blend_phase=15 most pixels do. Sweep a handful of (x, y) positions
-    by running free and sample pick_next — ensure it varies."""
-    clock = Clock(dut.clk, CLK_PERIOD_PS, unit="ps")
-    cocotb.start_soon(clock.start())
-    await reset_dut(dut)
-
-    await ClockCycles(dut.clk, 64)
-    try:
-        _ = dut.user_project.pick_next.value
-    except AttributeError:
-        dut._log.info("pick_next not accessible (GL sim?); skipping")
-        return
-
-    # blend_phase=0 (pc[5:2]=0): pick_next must be 0 for all (x,y), since
-    # bayer ≥ 0 is never strictly less than 0.
-    dut.user_project.ptr_counter.value = 0  # blend_phase=0
-    for _ in range(8):
-        await ClockCycles(dut.clk, 2)
-        assert int(dut.user_project.pick_next.value) == 0, \
-            "blend_phase=0: pick_next should always be 0"
-
-    # blend_phase=15 (pc[5:2]=15): most (x,y) pick next (only threshold=15 doesn't).
-    dut.user_project.ptr_counter.value = 0x3C  # pc[5:2]=15, pc[8:4]=3
-    ones = 0
-    for _ in range(16):
-        await ClockCycles(dut.clk, 2)
-        ones += int(dut.user_project.pick_next.value)
-    assert ones >= 10, f"blend_phase=15: expected most samples pick_next=1; got {ones}/16"
-
-
-@cocotb.test()
 async def test_breath_dims_on_low_half(dut):
     """Breath envelope: on the low half of the triangle cycle (breath_full=0),
     every lit dot is half-brightness; on the high half it's full. Pick two

@@ -469,10 +469,10 @@ async def test_pattern_mode_centres(dut):
 
     seen_centres = set()
     for mode in range(4):
-        # PATTERN_SHIFT=6 places mode bits at ptr_counter[7:6]. Use a pc value
-        # where the Lissajous drive puts ptr_x / ptr_y off-centre so the
-        # different modes produce distinguishable centres.
-        pc = 200 | (mode << 6)
+        # PATTERN_SHIFT=6 places mode bits at ptr_counter[7:6]. Base 8 keeps
+        # bits[7:6]=0 so OR-in cleanly sets the mode, while the Lissajous
+        # drive still puts ptr_x / ptr_y off-centre for distinguishable B.
+        pc = 8 | (mode << 6)
         dut.user_project.ptr_counter.value = pc
         await ClockCycles(dut.clk, 8)
         pm = int(dut.user_project.pattern_mode.value)

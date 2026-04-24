@@ -1,5 +1,5 @@
 /*
- * OrangeCrab ECP5-85F wrapper for tt_um_kilian_waves (variant F).
+ * OrangeCrab ECP5-85F wrapper for tt_um_kilian_interference (variant F).
  * PLL generates 51.2 MHz internal clock from 48 MHz oscillator.
  * Variant F runs internal logic at 2× the VGA pixel rate (50.35 MHz target;
  * 51.2 MHz is the closest achievable from 48 MHz via ECP5 PLL, and the VGA
@@ -38,7 +38,7 @@ module top (
 
     wire [7:0] uo_out;
 
-    tt_um_kilian_waves demo (
+    tt_um_kilian_interference demo (
         .ui_in  (8'b0000_0000),
         .uo_out (uo_out),
         .uio_in (8'h00),

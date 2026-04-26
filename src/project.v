@@ -71,6 +71,12 @@ module tt_um_kilian_interference (
   wire signed [9:0] p_bx = x - center_bx;
   wire signed [9:0] p_by = y - center_by;
 
+  // Recurrence deltas, sign-extended to accumulator width.
+  wire [13:0] dy_a = {{3{p_ay[9]}}, p_ay, 1'b0} - 14'd1;
+  wire [13:0] dy_b = {{3{p_by[9]}}, p_by, 1'b0} - 14'd1;
+  wire [13:0] dx_a = {{3{p_ax[9]}}, p_ax, 1'b0} + 14'd1;
+  wire [13:0] dx_b = {{3{p_bx[9]}}, p_bx, 1'b0} + 14'd1;
+
   // --- Distance-squared accumulators (two sources) ---
   // Narrowed accumulators: only need bits [17:14] for ring rendering.
   // Modular wrapping doesn't affect the visual since we extract phase bits.
@@ -79,42 +85,49 @@ module tt_um_kilian_interference (
   wire [14:0] ra = {r1a, 1'b0} + {1'b0, r2a};
   wire [14:0] rb = {r1b, 1'b0} + {1'b0, r2b};
 
+  // --- Y-squared accumulators ---
   always @(posedge clk) begin
     if (~rst_n) begin
-      r1a <= 0; r2a <= 0;
-      r1b <= 0; r2b <= 0;
-    end else begin
-      if (vsync) begin
-        r1a <= 0; r2a <= 0;
-        r1b <= 0; r2b <= 0;
-      end
+      r1a <= 0;
+      r1b <= 0;
+    end else if (vsync) begin
+      r1a <= 0;
+      r1b <= 0;
+    end else if (display_on & y == 0) begin
+      if (x < center_ay) r1a <= r1a + center_ay;
+      if (x < center_by) r1b <= r1b + center_by;
+    end else if (display_on & x == 0) begin
+      r1a <= r1a + dy_a;
+      r1b <= r1b + dy_b;
+    end
+  end
 
-      if (display_on & y == 0) begin
-        // Both sources init y-squared during first scanline
-        if (x < center_ay) r1a <= r1a + center_ay;
-        if (x < center_by) r1b <= r1b + center_by;
-      end else if (x == 640) begin
-        // 320*320 = 102400, mod 2^14 = 4096
-        r2a <= 14'd4096;
-        r2b <= 14'd4096;
-      end else if (x > 640) begin
-        // Source A hblank offset
-        if (offset_ax > 0 && x - 10'd641 < {5'd0, offset_ax[4:0]})
-          r2a <= r2a + 19'sd640 + offset_ax;
-        else if (offset_ax < 0 && x - 10'd641 < {5'd0, ~offset_ax[4:0] + 5'd1})
-          r2a <= r2a - (19'sd640 + offset_ax);
-        // Source B hblank offset (independent)
-        if (offset_bx > 0 && x - 10'd641 < {5'd0, offset_bx[4:0]})
-          r2b <= r2b + 19'sd640 + offset_bx;
-        else if (offset_bx < 0 && x - 10'd641 < {5'd0, ~offset_bx[4:0] + 5'd1})
-          r2b <= r2b - (19'sd640 + offset_bx);
-      end else if (display_on & x == 0) begin
-        r1a <= r1a + 2*p_ay + 1;
-        r1b <= r1b + 2*p_by + 1;
-      end else if (display_on) begin
-        r2a <= r2a + 2*p_ax + 1;
-        r2b <= r2b + 2*p_bx + 1;
-      end
+  // --- X-squared accumulators ---
+  always @(posedge clk) begin
+    if (~rst_n) begin
+      r2a <= 0;
+      r2b <= 0;
+    end else if (vsync) begin
+      r2a <= 0;
+      r2b <= 0;
+    end else if (x == 640) begin
+      // 320*320 = 102400, mod 2^14 = 4096
+      r2a <= 14'd4096;
+      r2b <= 14'd4096;
+    end else if (x > 640) begin
+      // Source A hblank offset
+      if (offset_ax > 0 && x - 10'd641 < {5'd0, offset_ax[4:0]})
+        r2a <= r2a + 19'sd640 + offset_ax;
+      else if (offset_ax < 0 && x - 10'd641 < {5'd0, ~offset_ax[4:0] + 5'd1})
+        r2a <= r2a - (19'sd640 + offset_ax);
+      // Source B hblank offset (independent)
+      if (offset_bx > 0 && x - 10'd641 < {5'd0, offset_bx[4:0]})
+        r2b <= r2b + 19'sd640 + offset_bx;
+      else if (offset_bx < 0 && x - 10'd641 < {5'd0, ~offset_bx[4:0] + 5'd1})
+        r2b <= r2b - (19'sd640 + offset_bx);
+    end else if (display_on) begin
+      r2a <= r2a + dx_a;
+      r2b <= r2b + dx_b;
     end
   end
 
@@ -133,8 +146,9 @@ module tt_um_kilian_interference (
   wire [1:0] G = display_on ? (palette[1] ? B_ring : G_ring) : 2'b00;
   wire [1:0] B = display_on ? (palette[0] ^ palette[1] ? R_ring : B_ring) : 2'b00;
 
+  // VGA 640x480@60Hz uses negative-polarity sync.
   // TinyVGA Pmod: {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]}
-  assign uo_out = {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]};
+  assign uo_out = {~hsync, B[0], G[0], R[0], ~vsync, B[1], G[1], R[1]};
 
 endmodule
 

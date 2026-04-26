@@ -47,8 +47,7 @@ module top (
         .rst_n  (rst_n)
     );
 
-    // Invert HSYNC[7] and VSYNC[3] for active-low VGA sync.
-    assign pmod = uo_out ^ 8'b1000_1000;
+    assign pmod = uo_out;
 
     assign led_r = 1'b1;
     assign led_g = ~pll_locked;  // green when PLL locked

@@ -33,8 +33,8 @@ BIT_HSYNC = 7
 def decode_vga(uo_out):
     """Decode uo_out into VGA signals."""
     val = int(uo_out.value)
-    hsync = (val >> BIT_HSYNC) & 1
-    vsync = (val >> BIT_VSYNC) & 1
+    hsync = 1 - ((val >> BIT_HSYNC) & 1)
+    vsync = 1 - ((val >> BIT_VSYNC) & 1)
     r = ((val >> BIT_R1) & 1) << 1 | ((val >> BIT_R0) & 1)
     g = ((val >> BIT_G1) & 1) << 1 | ((val >> BIT_G0) & 1)
     b = ((val >> BIT_B1) & 1) << 1 | ((val >> BIT_B0) & 1)
@@ -50,6 +50,20 @@ async def reset_dut(dut):
     await ClockCycles(dut.clk, 10)
     dut.rst_n.value = 1
     await RisingEdge(dut.clk)
+
+
+def mask14(value):
+    return value & 0x3FFF
+
+
+async def wait_for_xy(dut, x, y, max_cycles=V_TOTAL * H_TOTAL * 2):
+    """Advance until the internal VGA counters have the requested value."""
+    project = dut.user_project
+    for _ in range(max_cycles):
+        if int(project.x.value) == x and int(project.y.value) == y:
+            return
+        await RisingEdge(dut.clk)
+    raise AssertionError(f"Timed out waiting for x={x}, y={y}")
 
 
 @cocotb.test()
@@ -178,6 +192,58 @@ async def test_total_line_count(dut):
 
     assert line_count == V_TOTAL, f"Total lines per frame: expected {V_TOTAL}, got {line_count}"
     dut._log.info(f"Total lines per frame: {line_count} (expected {V_TOTAL})")
+
+
+@cocotb.test()
+async def test_y_recurrence_step(dut):
+    """Y accumulator must step by signed 2*p_y - 1 at x=0."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    await ClockCycles(dut.clk, V_TOTAL * H_TOTAL + 100)
+    project = dut.user_project
+
+    for row in [1, 2]:
+        await wait_for_xy(dut, 0, row)
+        before = int(project.r1a.value)
+        p_ay = project.p_ay.value.to_signed()
+        expected = mask14(2 * p_ay - 1)
+
+        await RisingEdge(dut.clk)
+        after = int(project.r1a.value)
+        actual = mask14(after - before)
+
+        assert actual == expected, (
+            f"r1a y step at row {row}: expected delta 0x{expected:04x} "
+            f"from p_ay={p_ay}, got 0x{actual:04x}"
+        )
+
+
+@cocotb.test()
+async def test_x_recurrence_step(dut):
+    """X accumulator must step by signed 2*p_x + 1 on every visible pixel."""
+    clock = Clock(dut.clk, 39722, unit="ps")
+    cocotb.start_soon(clock.start())
+    await reset_dut(dut)
+
+    await ClockCycles(dut.clk, V_TOTAL * H_TOTAL + 100)
+    project = dut.user_project
+
+    for row, col in [(100, 0), (100, 1), (100, 400)]:
+        await wait_for_xy(dut, col, row)
+        before = int(project.r2a.value)
+        p_ax = project.p_ax.value.to_signed()
+        expected = mask14(2 * p_ax + 1)
+
+        await RisingEdge(dut.clk)
+        after = int(project.r2a.value)
+        actual = mask14(after - before)
+
+        assert actual == expected, (
+            f"r2a x step at row {row}, col {col}: expected delta 0x{expected:04x} "
+            f"from p_ax={p_ax}, got 0x{actual:04x}"
+        )
 
 
 async def capture_frame(dut):

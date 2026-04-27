@@ -22,6 +22,7 @@
 
 `default_nettype none
 
+/* verilator lint_off DECLFILENAME */
 module tt_um_kilian_interference (
     input  wire [7:0] ui_in,    // Dedicated inputs
     output wire [7:0] uo_out,   // Dedicated outputs
@@ -32,6 +33,7 @@ module tt_um_kilian_interference (
     input  wire       clk,      // clock 50.35 MHz (2× VGA pixel rate)
     input  wire       rst_n     // reset_n - low to reset
 );
+/* verilator lint_on DECLFILENAME */
 
   assign uio_out = 0;
   assign uio_oe  = 0;
@@ -288,7 +290,8 @@ module tt_um_kilian_interference (
   // advances on vsync rising edge — so no dedicated flop needed.
   localparam MORPH_SHIFT = 4;
   wire [4:0] morph_raw = ptr_counter[MORPH_SHIFT+4 : MORPH_SHIFT];
-  wire [3:0] morph_env = morph_raw[4] ? (5'd31 - morph_raw) : morph_raw[3:0];
+  wire [4:0] morph_fold = morph_raw[4] ? (5'd31 - morph_raw) : {1'b0, morph_raw[3:0]};
+  wire [3:0] morph_env = morph_fold[3:0];
 
   // Scale saturated displacement by morph_env ≈ /15 via >>> 4. At env=0 dots
   // sit at cell centres; at env=15 positive peaks attenuate one level (+6 →
@@ -298,7 +301,8 @@ module tt_um_kilian_interference (
   // latched so both axes are available combinationally downstream.
   wire signed [3:0] dl_in = phase ? dly_sat : dlx_sat;
   wire signed [8:0] dl_scaled = $signed({1'b0, morph_env}) * dl_in;
-  wire signed [3:0] dl_morphed = dl_scaled >>> 4;
+  wire signed [8:0] dl_scaled_shift = dl_scaled >>> 4;
+  wire signed [3:0] dl_morphed = dl_scaled_shift[3:0];
 
   reg signed [3:0] dlx_m, dly_m;
   always @(posedge clk) begin
@@ -445,6 +449,26 @@ module tt_um_kilian_interference (
   wire [1:0] R = dot_on ? R_sat : 2'b00;
   wire [1:0] G = dot_on ? G_sat : 2'b00;
   wire [1:0] B = dot_on ? B_sat : 2'b00;
+
+  wire _unused_verilator_bits = &{
+    pc3[13:10],
+    pc5[14:10],
+    px_tri[1:0],
+    py_tri[1:0],
+    r_sel[2:0],
+    ra_lat[11],
+    ra_lat[7:0],
+    rb_lat[11],
+    rb_lat[7:0],
+    morph_fold[4],
+    dl_scaled_shift[8:4],
+    amp_lift_full[3:0],
+    amp_a_lifted[0],
+    amp_b_lifted[0],
+    pal_r,
+    pal_g,
+    1'b0
+  };
 
   // TinyVGA Pmod: {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]}
   assign uo_out = {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]};

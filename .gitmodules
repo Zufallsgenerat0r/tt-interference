@@ -1,0 +1,3 @@
+[submodule "vga_sim"]
+	path = vga_sim
+	url = https://github.com/jar/vga_sim

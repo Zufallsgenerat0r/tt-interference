@@ -6,19 +6,27 @@ A 40×30 dot lattice displaced by two interfering wave sources on a Lissajous tr
 
 - [Read the documentation for project](docs/info.md)
 
+## Disclaimer
+
+This repository has been developed with the help of various large language models (LLMs).
+
 ## VGA Simulator
 
 This repo includes [`jar/vga_sim`](https://github.com/jar/vga_sim) as a submodule
-for fast Verilator/SDL preview of the TinyVGA output.
+and a repo-local wrapper in `sim/` for fast Verilator/SDL preview of the TinyVGA
+output. The wrapper derives the DUT clock ratio from `info.yaml`, so this
+2x-clock design advances two DUT clocks per VGA pixel.
 
 ```bash
 git submodule update --init
-make -C vga_sim sim
+make -C sim sim
 ```
 
 The simulator reads `info.yaml`, builds the sources listed under `src`, and runs
-the top module. Use `make -C vga_sim gif` to record `vga_sim/output.gif`.
-Runtime options include `--polarity` for checking sync polarity.
+the top module. Use `make -C sim gif` to record `sim/output.gif`, or
+`make -C sim video` to record a 30-second `sim/output.mp4`. The default
+simulator arguments include `--polarity`, matching the raw ASIC sync pins before
+the OrangeCrab wrapper inverts them for the TinyVGA Pmod.
 
 ## What is Tiny Tapeout?
 
